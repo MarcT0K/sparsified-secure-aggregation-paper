@@ -14,13 +14,19 @@
 \acmConference{Proceedings on Privacy Enhancing Technologies}
 \settopmatter{printacmref=false,printccs=false,printfolios=true}
 
+%%% CUSTOM IMPORTS
+\usepackage{algpseudocode, algorithm, algorithmicx}
+
+\newcommand*\Let[2]{\State #1 $\gets$ #2}
+\newcommand{\share}[1]{[\![#1]\!]}
+\DeclareMathOperator{\nnz}{nnz}
 
 \begin{document}
 
 %%
 %% The "title" command has an optional parameter,
 %% allowing the author to define a "short title" to be used in page headers.
-\title{Sparsified Secure Aggregation}
+\title[Sparsified Secure Aggregation]{Sparsified Secure Aggregation\\ and its Applications to Large-Scale Federated Learning}
 
 %%%%%%%%%%%%%%%% Authors' Info %%%%%%%%%%%%%%%%%
 %%
@@ -35,12 +41,6 @@
 	\country{The Netherlands}}
 \email{m.f.d.damie@utwente.nl}
 
-% \author{Lars Th{\o}rv{\"a}ld}
-% \affiliation{%
-% \institution{The Th{\o}rv{\"a}ld Group}
-% \city{Hekla}
-% \country{Iceland}}
-% \email{larst@affiliation.org}
 
 %%
 %% By default, the full list of authors will be used in the page
@@ -78,12 +78,131 @@
 
 \subsection{Differential Privacy}
 
-\section{Our Sparsified Secure Aggregation}
 \subsection{Threat Model}
 
-\subsection{Our Protocol}
+\section{Problem statement}
 
-\subsection{Extension to Malicious Security}
+This section proposes to circumvent the problem of secure sparse aggregation and focus on a variant: probabilistic sparse agreggation.
+This alternative would support the same ML use cases (especially sparse gradient aggregation), but has properties that could simplify the design of secure protocols.
+
+\paragraph{Definition}
+
+Let $y_*$ be the output of an exact sparse aggregation. A probabilistic sparse aggregator outputs $\widetilde{y}$ such that $\mathbb{E}(\widetilde{y}) = y_*$.
+This probabilistic output seems acceptable for ML applications (e.g., decentralized gradient descent).
+
+For simplicity, we assume a probabilistic sparse aggregator only outputs sparse vectors with one non-zero elements.
+However, we can naturally extend this definition to any probabilistic ouput with $k$ non-zero elements.
+
+The probabilistic sparse aggregation would be executed several times in a row to approach the perfect sparse aggregation results.
+
+\paragraph{Computational advantages}
+This probabilistic problem might have more efficient solutions than the classic sparse aggregation.
+We may build protocols with logarithmic communication costs since the protocols must only output one non-zero value.
+Hence, we would not have a cost linear in the number of non-zeros (or even linear in the number of dimensions).
+
+\paragraph{Security advantages}
+This problem also solves our leakage issue.
+Indeed, as the protocol must output one non-zero elements, we do not need to leak securely the number of non-zeros (contrary to the exact sparse aggregation).
+
+\section{Sparsified secure aggregation protocol}
+
+\subsection{Threat Model}
+
+
+\subsection{Base protocol}
+This section presents a secure probabilistic sparse aggregation.
+We rely on secret-sharing-based multi-party computation and assume that all the data owners are involved in the computation.
+We have $N$ parties each with a $d$-dimensional sparse vector $x_k$ containing a single non-zero elements $(i_k, v_k)$.
+
+\paragraph{Toy protocol}
+
+A first simplistic solution would be to agree on a public random seed.
+The parties would use this random seed to sample an index $i$ in $\{1\dots d\}$.
+Then, each party shares a secret value $s_k$ with the rest of the parties: $s_k = v_k$ if $i = i_k$, $0$ otherwise.
+The parties sum all the shares and reveal the sum multiplied by $d$.
+
+This probabilistic aggregation is unbiased, but it has a slow convergence.
+Indeed, picking a coordinate at random in sparse vectors will result in picking zero coordinates most of the time.
+Hence, the protocol is efficient but would require many repetitions to have an accurate estimation of the perfect sparse aggregation.
+To improve the previous protocol, we need to sample a coordinate \emph{only among the non-zero coordinates} instead of sampling it in $\{1\dots d\}$.
+Such improvements would guarantee a faster convergence of our estimator.
+
+\paragraph{Biased estimation}
+
+Algorithm \ref{alg:prob_sparse_agg} provides a first efficient solution to our problem.
+This iterative protocol samples one coordinate among the non-zero coordinates.
+The communication cost (per data owner) is $O(N\cdot \log d)$ (for $N$ parties and $d$ dimensions).
+Our sampling protocol represents the coordinate space (i.e., $\{1\dots d\}$) via a binary tree, and samples `a non-zero path' in the tree.
+
+\begin{algorithm}
+	\caption{Biased probabilistic sparse aggregation \label{alg:prob_sparse_agg}}
+
+	\begin{algorithmic}[1]
+		\Require{A group of $N$ parties. Each party $k$ owns a private sparse $d$-dimensional vector $x_k$.}
+		\Statex
+		\Function{ProbabilisticSparseAggregation}{$\{x_k\}_{k\in[N]}$}
+		\Let{$l$}{$1$}
+		\Let{$u$}{$d$}
+		\While{$l \neq u$}
+		\State{// Local operations:}
+		\Let{$m$}{$\lfloor\frac{u+l}{2}\rfloor$}
+		\Let{$c^\text{left}_k$}{Number of nnz in $x_k$ with a coordinate in $\{l\dots m\}$ in $x_k$}
+		\Let{$c^\text{right}_k$}{Number of nnz in $x_k$ with a coordinate in $\{m+1\dots u\}$ in $x_k$}
+		\Statex
+		\State{// Online operations:}
+		\For{all $i\in [N]$}
+		\Let{$\share{c^\text{left}_k}$}{Party $k$ shares $c^\text{left}_k$ with the other parties}
+		\Let{$\share{c^\text{right}_k}$}{Party $k$ shares $c^\text{right}_k$ with the other parties}
+		\EndFor
+		\Statex
+		\Let{$\share{c^\text{left}}$}{$\sum_{k\in[N]}\share{c^\text{left}_k}$}
+		\Let{$\share{c^\text{right}}$}{$\sum_{k\in[N]}\share{c^\text{right}_k}$}
+		\State{Generate two random secret-shared numbers: $\share{r_1}, \share{r_2}$}
+
+		\Statex
+		\State{// Choose uniformly at random a path \textit{containing non-zero coord.}:}
+		\Let{$\text{choice}$}{\Call{Reveal}{$\share{c^\text{left}}\cdot \share{r_1}< \share{r_2}\cdot\share{c^\text{right}}$}}
+		\If{$\text{choice}$}
+		\Let{$l$}{$m$}
+		\Else
+		\Let{$u$}{$m$}
+		\EndIf
+		\EndWhile
+		\Statex
+		\Let{$\text{coord}$}{$l$}
+		\For{all $i\in [N]$}
+		\Let{$\share{\text{val}_k}$}{Party $k$ shares the value of $x_k$ on coordinate $\text{coord}$}
+		\EndFor
+		\Let{$\text{val}$}{\Call{Reveal}{$\sum_{k\in[N]} \share{\text{val}_k}$}}
+		\State \Return{$(\text{coord}, \text{val})$}
+		\EndFunction
+	\end{algorithmic}
+\end{algorithm}
+
+However, this protocol outputs a biased estimation of the exact sparse aggregation.
+The causes of this bias are: (1) the tree path sampling is not uniform, (2) even with a uniform sampling, the expected value would be $\mathbb{E}(\widetilde{y}) = y_*\cdot \nnz_*$, with $nnz_*$ the number of non-zeros in the exact output $y_*$.
+
+
+\paragraph{Unbiased estimation}
+
+To have a uniform path sampling, we can add a simple permutation step.
+At the beginning of the protocol, the parties agree on a public random seed and use it to generate a permutation $\pi$ applied to the non-zero coordinates.
+Every time the protocol is executed, a new permutation is generated.
+Thanks to this random permutation, the algorithm would perform a uniform sampling over the non-zero coordinates of the aggregated vector.
+
+The second source of bias is less trivial to solve because we need to estimate $nnz_*$ without computing the exact sparse aggregation.
+For this estimation, we will rely on the following proportion: $\rho = \frac{{\sum_k \nnz(x_k)}}{\nnz_*}$.
+This proportion can be interpreted as an overlapping rate, i.e., the average number of values aggregated on non-zero coordinates.
+In other words, this value quantifies how much the input sparse vectors overlap.
+
+To estimate $\rho$, we can also use our probabilistic aggregation protocol to sample multiple non-zero coordinates and compute the average number of non-zeros on the sampled coordinates.
+Instead of sharing values $\share{\text{val}_k}$, the parties would share either $1$ (if they have a non-zero on the sampled coordinate), $O$ otherwise.
+This estimation protocol can reuse the tree paths already sampled for the probabilistic sparse aggregation.
+Once we have an estimation of $\rho$, we can deduce the number of non-zeros in the complete aggregated vector.
+Note that $\rho$ can remain secret because this estimation protocol can be performed under secret sharing.
+Hence, we can output directly an unbiased probabilistic sparse aggregation (without leaking the biased result and the correction factor).
+
+\subsection{Differentially private protocol}
 
 \section{Theoretical Analysis}
 
@@ -98,6 +217,11 @@
 \subsection{Utility}
 
 \subsection{Efficiency}
+
+\section{Extensions}
+\subsection{Malicious Security}
+
+\subsection{Single-server variant}
 
 \section{Conclusion}
 
